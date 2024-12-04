@@ -4,7 +4,7 @@ from sklearn.preprocessing import MinMaxScaler
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit, train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, make_scorer
 from sklearn.base import BaseEstimator, RegressorMixin
 import pandas as pd
@@ -43,67 +43,86 @@ def create_sequences(data, sequence_length):
         y.append(data[i, 0])  # First column is Adj Close
     return np.array(X), np.array(y)
 
-def forward_stepwise_selection(X, y, sequence_length, model_fn, metric=mean_squared_error):
+def forward_stepwise_selection_optimized(X, y, sequence_length, model_fn, metric=mean_squared_error, improvement_threshold=0.01, max_features=None):
     """
-    Perform forward stepwise selection of features.
-    
+    Optimized forward stepwise selection for features.
+
     Parameters:
-        X (DataFrame): The input feature set.
+        X (DataFrame): Input feature set.
         y (array): Target variable.
         sequence_length (int): Length of input sequences.
         model_fn (function): Function to create and train a model.
         metric (function): Metric to evaluate model performance (default: MSE).
-        
-    Returns:
-        selected_features (list): The list of selected features.
-    """
-    remaining_features = list(X.columns)  # All features
-    selected_features = []  # Selected features
-    best_metric = float('inf')  # Initialize with a large value
-    X_np, y_np = X.to_numpy(), y.to_numpy()
+        improvement_threshold (float): Minimum improvement to continue feature selection.
+        max_features (int, optional): Maximum number of features to select.
 
+    Returns:
+        selected_features (list): List of selected features.
+        performance_history (list): Performance history during selection.
+    """
+    remaining_features = list(X.columns)  # Features to select from
+    selected_features = []  # Features already selected
+    best_metric = float('inf')  # Initialize best metric
+    performance_history = []  # Store feature selection progression
+
+    # Create a single train-validation split
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
+    
     while remaining_features:
-        metrics = {}
-        
-        # Test each feature not yet selected
+        feature_metrics = {}
+
         for feature in remaining_features:
+            # Candidate features include already selected + the new feature
             candidate_features = selected_features + [feature]
-            
-            # Create sequences with candidate features
-            X_candidate = X[candidate_features].to_numpy()
+
+            # Create sequences for the candidate features
+            X_candidate = X_train[candidate_features].to_numpy()
             X_seq, y_seq = create_sequences(X_candidate, sequence_length)
 
-            # Split data for time-series validation
-            tscv = TimeSeriesSplit(n_splits=3)
-            fold_metrics = []
-            for train_idx, val_idx in tscv.split(X_seq):
-                X_train, X_val = X_seq[train_idx], X_seq[val_idx]
-                y_train, y_val = y_seq[train_idx], y_seq[val_idx]
-                
-                # Train the model on the current subset of features
-                model = model_fn(X_train.shape[2])  # Dynamically create a model
-                model.fit(X_train, y_train)
-                
-                # Predict and evaluate on validation set
-                y_pred = model.predict(X_val)
-                fold_metrics.append(metric(y_val, y_pred))
-            
-            # Average performance across folds
-            metrics[feature] = np.mean(fold_metrics)
+            X_val_candidate = X_val[candidate_features].to_numpy()
+            X_val_seq, y_val_seq = create_sequences(X_val_candidate, sequence_length)
 
-        # Select the best feature
-        best_feature = min(metrics, key=metrics.get)
-        if metrics[best_feature] < best_metric:
-            best_metric = metrics[best_feature]
+            # Train model for the current subset of features
+            model = model_fn(len(candidate_features))
+            model.fit(X_seq, y_seq)
+
+            # Predict and calculate the metric
+            y_pred = model.predict(X_val_seq)
+            feature_metrics[feature] = metric(y_val_seq, y_pred)
+
+        # Select the best feature from the current round
+        best_feature = min(feature_metrics, key=feature_metrics.get)
+        best_feature_metric = feature_metrics[best_feature]
+
+        # Check for improvement
+        if best_feature_metric < best_metric - improvement_threshold:
             selected_features.append(best_feature)
             remaining_features.remove(best_feature)
+            best_metric = best_feature_metric
+            performance_history.append((len(selected_features), best_metric))
             print(f"Added feature: {best_feature} (Metric: {best_metric:.4f})")
         else:
-            # Stop if no improvement
+            print("No significant improvement. Stopping selection.")
             break
 
-    print(f"Selected Features: {selected_features}")
-    return selected_features
+        # Stop if maximum features reached
+        if max_features and len(selected_features) >= max_features:
+            break
+
+    # Visualization
+    if performance_history:
+        features, metrics = zip(*performance_history)
+        plt.figure(figsize=(10, 6))
+        plt.plot(features, metrics, marker='o', linestyle='-', color='b')
+        plt.title('Forward Stepwise Selection: Error vs. Number of Features')
+        plt.xlabel('Number of Features')
+        plt.ylabel('Error Metric')
+        plt.grid(True)
+        plt.show()
+
+    print(f"Final Selected Features: {selected_features}")
+    return selected_features, performance_history
+
 
 # LSTM Model
 class LSTM(nn.Module):
@@ -228,12 +247,15 @@ y_train = df_train['Adj Close']
 X_test = df_test.drop(columns=['Adj Close'])
 y_test = df_test['Adj Close']
 
-# Apply feature selection
-selected_features = forward_stepwise_selection(
-    X=X_train, 
-    y=y_train, 
-    sequence_length=30,  # LSTM sequence length
-    n_features=10        # Max number of features to select
+# Run optimized forward selection
+selected_features, performance_history = forward_stepwise_selection_optimized(
+    X_train, 
+    y_train, 
+    sequence_length=30, 
+    model_fn=LSTMRegressor, 
+    metric=mean_squared_error, 
+    improvement_threshold=0.01,  # Minimum improvement to continue
+    max_features=10  # Optional: Limit the number of selected features
 )
 
 # Use only the selected features
