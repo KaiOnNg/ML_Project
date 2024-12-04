@@ -37,34 +37,37 @@ def create_features(df):
 # Create lagged features
 def create_lagged_features(data, lag=30):
     """
-    Generate lagged features for all columns in the dataset for time series prediction.
+    Generate lagged features for all numeric columns in the dataset for time series prediction.
     """
-    lagged_frames = [data]  # Start with the original dataset
+    # Select only numeric columns
+    numeric_cols = data.select_dtypes(include=['float64', 'int64']).columns
+    data_numeric = data[numeric_cols]
+    
+    lagged_frames = [data_numeric]  # Start with the original numeric data
+    
     for i in range(1, lag + 1):
-        # Shift all columns in the dataset to create lagged features
-        lagged_frame = data.shift(i).add_suffix(f'_Lag_{i}')
+        # Shift all numeric columns to create lagged features
+        lagged_frame = data_numeric.shift(i).add_suffix(f'_Lag_{i}')
         lagged_frames.append(lagged_frame)
     
     # Combine all lagged dataframes
     df_lagged = pd.concat(lagged_frames, axis=1)
     df_lagged.dropna(inplace=True)  # Drop rows with NaN values due to lagging
+    
     return df_lagged
+
 
 # Load and preprocess the dataset
 df = pd.read_csv('SP500_with_indicators_^GSPC.csv').dropna()
+df = df.drop(columns=['Close'])  # Drop 'Close' as it's unused
 df['Date'] = pd.to_datetime(df['Date'])
 df.set_index('Date', inplace=True)
 
 # Create enhanced feature set
 df_enhanced = create_features(df)
 
-# Define the features and target
-features = ['Adj Close', 'Open', 'High', 'Low', 'Volume', 'ATR', 'ADX', 'RSI', 
-            'MACD', 'MACD_Signal', 'Volatility', 'Max_Drawdown']
-target = 'Adj Close'
-
 # Apply lagged features
-lagged_df = create_lagged_features(df_enhanced[features], lag=30)
+lagged_df = create_lagged_features(df_enhanced, lag=30)
 
 # Prepare data for modeling
 X = lagged_df.drop(columns=['Adj Close'])  # Exclude 'Adj Close' from features
@@ -80,9 +83,9 @@ X_train_val, X_test = X[:split_index], X[split_index:]
 y_train_val, y_test = y[:split_index], y[split_index:]
 
 # Hyperparameter tuning for Lasso
-alphas = [0.0001, 0.001, 0.005, 0.01, 0.1, 0.5]  # List of alpha values to test
+alphas = [0.01, 0.1, 0.3, 0.5, 1]  # List of alpha values to test
 
-lasso = Lasso(max_iter=50000)
+lasso = Lasso(max_iter=10000)
 
 # Time Series Cross-Validation 
 tscv = TimeSeriesSplit(n_splits=5)
@@ -117,6 +120,14 @@ for alpha in alphas:
     avg_rmse = np.mean(fold_rmse)
     avg_r2 = np.mean(fold_r2)
     
+    validation_results.append({
+        'alpha': alpha,
+        'MAE': avg_mae,
+        'RMSE': avg_rmse,
+        'R2': avg_r2
+    })
+
+    # Print average metrics for this alpha
     print(f"Average metrics for alpha = {alpha}")
     print(f"MAE: {avg_mae:.4f}")
     print(f"RMSE: {avg_rmse:.4f}")
