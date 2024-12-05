@@ -39,12 +39,14 @@ def create_features(df):
     #         )
     return df_new
 
-def create_sequences(data, target, sequence_length):
-    """Create sequences for LSTM"""
+def create_sequences(data, sequence_length=30):
+    """
+    Create sequences of past data for LSTM.
+    """
     X, y = [], []
-    for i in range(len(data) - sequence_length):
-        X.append(data[i:(i + sequence_length)])
-        y.append(target[i + sequence_length])
+    for i in range(sequence_length, len(data)):
+        X.append(data[i-sequence_length:i])  # Sequence of 'sequence_length' days
+        y.append(data[i, 0])  # Target is the 'Adj Close' column
     return np.array(X), np.array(y)
 
 def forward_stepwise_selection_optimized(X, y, sequence_length, model_fn, metric=mean_squared_error, improvement_threshold=0.01, max_features=None):
@@ -258,19 +260,19 @@ X_test = df_test.drop(columns=['Adj Close'])
 y_test = df_test['Adj Close']
 
 # Run optimized forward selection
-selected_features, performance_history = forward_stepwise_selection_optimized(
-    X_train, 
-    y_train, 
-    sequence_length=30, 
-    model_fn=LSTMRegressor, 
-    metric=mean_squared_error, 
-    improvement_threshold=0.01,  # Minimum improvement to continue
-    max_features=10  # Optional: Limit the number of selected features
-)
-
+# selected_features, performance_history = forward_stepwise_selection_optimized(
+#     X_train, 
+#     y_train, 
+#     sequence_length=30, 
+#     model_fn=LSTMRegressor, 
+#     metric=mean_squared_error, 
+#     improvement_threshold=0.01,  # Minimum improvement to continue
+#     max_features=10  # Optional: Limit the number of selected features
+# )
+selected_features = ['MACD', 'MACD_Signal', 'Volume_log']
 # Use only the selected features
-X_train = X_train[selected_features]
-X_test = X_test[selected_features]
+# X_train = X_train[selected_features]
+# X_test = X_test[selected_features]
 
 # Normalize data
 scaler = MinMaxScaler()
@@ -279,17 +281,21 @@ X_test_scaled = scaler.transform(X_test)
 
 # Create sequences
 sequence_length = 30
-X_train_seq, y_train_seq = create_sequences(X_train_scaled, y_train.values, sequence_length)
-X_test_seq, y_test_seq = create_sequences(X_test_scaled, y_test.values, sequence_length)
+# Combine features and target for sequence creation
+train_data = np.column_stack((y_train.values.reshape(-1,1), X_train_scaled))
+test_data = np.column_stack((y_test.values.reshape(-1,1), X_test_scaled))
+
+# Create sequences using the original function
+X_train_seq, y_train_seq = create_sequences(train_data, sequence_length)
+X_test_seq, y_test_seq = create_sequences(test_data, sequence_length)
 
 # Hyperparameter grid
 param_grid = {
     'hidden_size': [50, 100, 200],
     'num_layers': [1, 2],
     'lr': [0.001, 0.01],
-    'batch_size': [16, 32],
+    'batch_size': [16, 25],
     'dropout': [0.2, 0.4],
-    'weight_decay': [1e-4, 1e-3],
     'epochs': [50],  # Fixed epochs for GridSearch
 }
 
@@ -307,12 +313,13 @@ grid_search = GridSearchCV(
 )
 
 # Fit GridSearchCV
-grid_search.fit(X_train_seq, y_train_seq) 
+# grid_search.fit(X_train_seq, y_train_seq) 
 
-# Best parameters
-best_params = grid_search.best_params_
-print("Best Parameters:", best_params)
+# # Best parameters
+# best_params = grid_search.best_params_
+# print("Best Parameters:", best_params)
 
+best_params = {'batch_size': 16, 'dropout': 0.2, 'epochs': 50, 'hidden_size': 50, 'lr': 0.001, 'num_layers': 1}
 # Train the final model on the entire training set
 final_model = LSTMRegressor(input_size=X_train_seq.shape[2], **best_params)
 final_model.fit(X_train_seq, y_train_seq)
