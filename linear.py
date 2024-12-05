@@ -56,6 +56,86 @@ def create_lagged_features(data, lag=30):
     
     return df_lagged
 
+def forward_feature_selection_linear(X, y, metric=mean_squared_error, improvement_threshold=0.01, max_features=None):
+    """
+    Perform forward stepwise feature selection for linear model.
+    
+    Args:
+        X (DataFrame): Feature DataFrame
+        y (Series): Target variable
+        metric (function): Metric to evaluate model performance
+        improvement_threshold (float): Minimum improvement needed
+        max_features (int): Maximum number of features to select
+    """
+    remaining_features = list(X.columns)
+    selected_features = []
+    best_metric = float('inf')
+    performance_history = []
+    tscv = TimeSeriesSplit(n_splits=5)
+    scaler = MinMaxScaler()
+    
+    print("Starting forward feature selection...")
+    
+    while remaining_features:
+        feature_metrics = {}
+        
+        for feature in remaining_features:
+            # Candidate features include already selected + new feature
+            candidate_features = selected_features + [feature]
+            
+            # Scale features
+            X_subset = X[candidate_features]
+            X_scaled = scaler.fit_transform(X_subset)
+            
+            # Cross-validation scores
+            fold_scores = []
+            
+            for train_idx, val_idx in tscv.split(X_scaled):
+                X_train, X_val = X_scaled[train_idx], X_scaled[val_idx]
+                y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+                
+                # Train Lasso model
+                model = Lasso(alpha=0.1, max_iter=10000)
+                model.fit(X_train, y_train)
+                
+                # Predict and calculate score
+                y_pred = model.predict(X_val)
+                fold_scores.append(metric(y_val, y_pred))
+            
+            # Average score across folds
+            mean_score = np.mean(fold_scores)
+            feature_metrics[feature] = mean_score
+            print(f"{feature}: MSE = {mean_score:.4f}")
+        
+        # Select best feature
+        best_feature = min(feature_metrics.items(), key=lambda x: x[1])
+        
+        if best_feature[1] < best_metric - improvement_threshold:
+            selected_features.append(best_feature[0])
+            remaining_features.remove(best_feature[0])
+            best_metric = best_feature[1]
+            performance_history.append((len(selected_features), best_metric))
+            print(f"\nAdded feature: {best_feature[0]} (MSE: {best_feature[1]:.4f})")
+        else:
+            print("\nNo significant improvement. Stopping selection.")
+            break
+            
+        if max_features and len(selected_features) >= max_features:
+            break
+    
+    # Visualization
+    if performance_history:
+        features, metrics = zip(*performance_history)
+        plt.figure(figsize=(10, 6))
+        plt.plot(features, metrics, marker='o', linestyle='-', color='b')
+        plt.title('Forward Feature Selection: Error vs. Number of Features')
+        plt.xlabel('Number of Features')
+        plt.ylabel('Error Metric')
+        plt.grid(True)
+        plt.show()
+    
+    print("\nFinal selected features:", selected_features)
+    return selected_features, performance_history
 
 # Load and preprocess the dataset
 df = pd.read_csv('SP500_with_indicators_^GSPC.csv').dropna()
@@ -81,6 +161,22 @@ X_scaled = scaler.fit_transform(X)
 split_index = int(len(X) * 0.8)
 X_train_val, X_test = X[:split_index], X[split_index:]
 y_train_val, y_test = y[:split_index], y[split_index:]
+
+# First perform feature selection
+selected_features, performance_history = forward_feature_selection_linear(
+    X=X_train_val,
+    y=y_train_val,
+    metric=mean_squared_error,
+    improvement_threshold=0.01,
+    max_features=10
+)
+
+# Then use selected features to filter data
+X_train_val = X_train_val[selected_features]
+X_test = X_test[selected_features]
+
+print(f"Number of selected features: {len(selected_features)}")
+print("Selected features:", selected_features)
 
 # Hyperparameter tuning for Lasso
 alphas = [0.01, 0.1, 0.3, 0.5, 1]  # List of alpha values to test
