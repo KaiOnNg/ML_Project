@@ -5,6 +5,7 @@ import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import pandas as pd
 import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
 
 # Diagnostic info
 print(f"PyTorch Version: {torch.__version__}")
@@ -46,53 +47,68 @@ def create_sequences(data, target, sequence_length=30):
         y.append(target[i])
     return np.array(X), np.array(y)
 
-# Forward Stepwise Selection
+# Custom Dataset class
+class TimeSeriesDataset(Dataset):
+    def __init__(self, X, y, sequence_length):
+        self.X = torch.FloatTensor(X)
+        self.y = torch.FloatTensor(y)
+        self.sequence_length = sequence_length
+
+    def __len__(self):
+        return len(self.X) - self.sequence_length + 1
+
+    def __getitem__(self, i):
+        return (
+            self.X[i:i+self.sequence_length],
+            self.y[i+self.sequence_length-1]
+        )
+
+# Modified forward_stepwise_selection function
 def forward_stepwise_selection(X, y, sequence_length, model_fn, max_features=10):
-    """Perform forward stepwise selection of features."""
-    remaining_features = list(X.columns)
     selected_features = []
-    best_score = float('inf')
-
-    while remaining_features:
-        feature_scores = {}
-
+    remaining_features = list(X.columns)
+    
+    print("Forward stepwise selection:")
+    for _ in range(max_features):
+        best_score = float('inf')
+        best_feature = None
+        
         for feature in remaining_features:
-            candidate_features = selected_features + [feature]
-            X_candidate = X[candidate_features].to_numpy()
-
-            # Create sequences
-            X_seq, y_seq = create_sequences(X_candidate, y.values, sequence_length)
-
-            # Train-validation split
-            train_size = int(len(X_seq) * 0.8)
-            X_train, X_val = X_seq[:train_size], X_seq[train_size:]
-            y_train, y_val = y_seq[:train_size], y_seq[train_size:]
-
-            # Train the model
-            model = model_fn(len(candidate_features))
-            model.fit(X_train, y_train)
-
-            # Validate and score
-            y_pred = model.predict(X_val)
-            score = mean_squared_error(y_val, y_pred)
-            feature_scores[feature] = score
-
-        # Select the best feature
-        best_feature = min(feature_scores, key=feature_scores.get)
-        if feature_scores[best_feature] < best_score:
-            best_score = feature_scores[best_feature]
-            selected_features.append(best_feature)
-            remaining_features.remove(best_feature)
-            print(f"Added feature: {best_feature} (Score: {best_score:.4f})")
-        else:
-            print("No improvement. Stopping.")
+            current_features = selected_features + [feature]
+            X_subset = X[current_features].values
+            
+            # Create dataset and dataloader
+            dataset = TimeSeriesDataset(X_subset, y.values, sequence_length)
+            train_loader = DataLoader(dataset, batch_size=32, shuffle=True)
+            
+            # Initialize model
+            model = model_fn(len(current_features))
+            optimizer = torch.optim.Adam(model.parameters())
+            criterion = torch.nn.MSELoss()
+            
+            # Training loop
+            model.train()
+            for epoch in range(5):  # Reduced epochs for feature selection
+                epoch_loss = 0
+                for batch_X, batch_y in train_loader:
+                    optimizer.zero_grad()
+                    output = model(batch_X)
+                    loss = criterion(output.squeeze(), batch_y)
+                    loss.backward()
+                    optimizer.step()
+                    epoch_loss += loss.item()
+                
+            if epoch_loss < best_score:
+                best_score = epoch_loss
+                best_feature = feature
+        
+        if best_feature is None:
             break
-
-        if max_features and len(selected_features) >= max_features:
-            break
-
+            
+        selected_features.append(best_feature)
+        remaining_features.remove(best_feature)
+    
     return selected_features
-
 # LSTM Model
 class LSTM(nn.Module):
     def __init__(self, input_size, hidden_size=100, num_layers=1, dropout=0.0):
@@ -130,6 +146,7 @@ selected_features = forward_stepwise_selection(
 )
 print("Selected Features:", selected_features)
 
+# selected_features = ['Volume', 'MACD', 'Adj Close_log']
 # Use only selected features
 df = df[selected_features + ["Adj Close"]]
 
@@ -175,8 +192,9 @@ num_epochs = 30
 batch_size = 32
 
 for epoch in range(num_epochs):
+    # Training phase
     model.train()
-    epoch_loss = 0
+    train_loss = 0
 
     for i in range(0, len(X_train), batch_size):
         inputs = X_train_tensor[i:i+batch_size].to(device)
@@ -189,11 +207,26 @@ for epoch in range(num_epochs):
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        epoch_loss += loss.item()
+        train_loss += loss.item()
 
-    print(f"Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss:.6f}")
+    # Validation phase
+    model.eval()
+    val_loss = 0
+    with torch.no_grad():
+        for i in range(0, len(X_test), batch_size):
+            inputs = X_test_tensor[i:i+batch_size].to(device)
+            targets = y_test_tensor[i:i+batch_size].to(device)
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            val_loss += loss.item()
 
-# Evaluate the model
+    # Calculate average losses
+    avg_train_loss = train_loss / (len(X_train) / batch_size)
+    avg_val_loss = val_loss / (len(X_test) / batch_size)
+    
+    print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
+
+# Final evaluation
 model.eval()
 with torch.no_grad():
     y_pred_scaled = model(X_test_tensor.to(device)).cpu().numpy()
@@ -210,28 +243,37 @@ r2 = r2_score(y_test, y_pred)
 print(f"Test MAE: {mae:.4f}, RMSE: {rmse:.4f}, R2: {r2:.4f}")
 
 # Calculate 0.5% accuracy
-accuracy = [abs((pred - actual) / actual) <= 0.005 for pred, actual in zip(y_pred, y_test)]
-accuracy_rate = sum(accuracy) / len(accuracy) * 100
+accuracy = np.array([abs((pred - actual) / actual) <= 0.005 
+                    for pred, actual in zip(y_pred.flatten(), y_test.flatten())])
+accuracy_rate = np.mean(accuracy) * 100  # No need for explicit float conversion
 
 # Directional Accuracy
-actual_direction = np.diff(y_test, axis=0) > 0
-predicted_direction = np.diff(y_pred, axis=0) > 0
+actual_direction = np.diff(y_test.flatten()) > 0
+predicted_direction = np.diff(y_pred.flatten()) > 0
 directional_accuracy = np.mean(actual_direction == predicted_direction) * 100
+
 
 print(f"0.5% Accuracy: {accuracy_rate:.2f}%")
 print(f"Directional Accuracy: {directional_accuracy:.2f}%")
 
 # Visualization
-plt.figure(figsize=(14, 8))
+plt.figure(figsize=(15, 10))
 
 # Subplot 1: Actual vs Predicted Prices
 plt.subplot(2, 1, 1)
-plt.plot(y_test, label="Actual", color="blue")
-plt.plot(y_pred, label="Predicted", color="red")
-plt.title("LSTM: Actual vs Predicted Prices")
+plt.plot(range(len(y_test)), y_test, label='Actual', color='blue')
+plt.plot(range(len(y_pred)), y_pred, label='Predicted', color='red')
+plt.title('LSTM: Actual vs Predicted Prices')
 plt.legend()
 plt.grid(True)
 
-# Subplot 2: Prediction Accuracy
+# Subplot 2: Prediction Accuracy (within 0.5% error)
 plt.subplot(2, 1, 2)
-plt.scatter(range(len(accuracy)), accuracy, label=f"0.5% Accuracy: {accuracy_rate:.2f}%", color="green")
+plt.scatter(range(len(accuracy)), accuracy, label=f'LSTM Accuracy (0.5% error): {float(accuracy_rate):.2f}%', color='green', s=5)
+
+plt.title('Prediction Accuracy (1 = within 0.5% error, 0 = outside 0.5% error)')
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
