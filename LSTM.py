@@ -24,6 +24,7 @@ def create_features(df):
     # Square and cube terms
     for feature in numeric_features:
         df_new[f'{feature}_squared'] = df[feature] ** 2
+        df_new[f'{feature}_cubed'] = df[feature] ** 3
     
     # Log terms
     for feature in numeric_features:
@@ -31,12 +32,12 @@ def create_features(df):
             df_new[f'{feature}_log'] = np.log(df[feature] + 1)
     
     # Interaction terms
-    # important_features = ['Adj Close', 'Volume', 'RSI']
-    # for i in range(len(important_features)):
-    #     for j in range(i+1, len(important_features)):
-    #         df_new[f'{important_features[i]}_{important_features[j]}_interaction'] = (
-    #             df[important_features[i]] * df[important_features[j]]
-    #         )
+    important_features = ['Adj Close', 'Volume', 'RSI']
+    for i in range(len(important_features)):
+        for j in range(i+1, len(important_features)):
+            df_new[f'{important_features[i]}_{important_features[j]}_interaction'] = (
+                df[important_features[i]] * df[important_features[j]]
+            )
     return df_new
 
 def create_sequences(data, sequence_length=30):
@@ -160,7 +161,7 @@ class LSTMRegressor(BaseEstimator, RegressorMixin):
         self.dropout = dropout
         self.weight_decay = weight_decay
         self.patience = patience
-        self.device = torch.device('cuda')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = None
 
     def _build_model(self):
@@ -269,25 +270,22 @@ y_test = df_test['Adj Close']
 #     improvement_threshold=0.01,  # Minimum improvement to continue
 #     max_features=10  # Optional: Limit the number of selected features
 # )
-selected_features = ['MACD', 'MACD_Signal', 'Volume_log']
+selected_features = ['High', 'Low', 'Adj Close_RSI_interaction', 'RSI_log']
 # Use only the selected features
 # X_train = X_train[selected_features]
 # X_test = X_test[selected_features]
 
 # Normalize data
 scaler = MinMaxScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+X_train_scaled = scaler.fit_transform(X_train[selected_features])
+X_test_scaled = scaler.transform(X_test[selected_features])
 
 # Create sequences
 sequence_length = 30
-# Combine features and target for sequence creation
-train_data = np.column_stack((y_train.values.reshape(-1,1), X_train_scaled))
-test_data = np.column_stack((y_test.values.reshape(-1,1), X_test_scaled))
 
 # Create sequences using the original function
-X_train_seq, y_train_seq = create_sequences(train_data, sequence_length)
-X_test_seq, y_test_seq = create_sequences(test_data, sequence_length)
+X_train_seq, y_train_seq = create_sequences(X_train_scaled, sequence_length)
+X_test_seq, y_test_seq = create_sequences(X_test_scaled, sequence_length)
 
 # Hyperparameter grid
 param_grid = {
