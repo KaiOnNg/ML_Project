@@ -4,19 +4,13 @@ import torch.optim as optim
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import Ridge
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV, train_test_split
 import xgboost as xgb
 import matplotlib.pyplot as plt
 from sklearn.feature_selection import SelectFromModel, SelectKBest, f_regression
 from sklearn.utils import resample
-
-if torch.cuda.is_available():
-    print("CUDA is available!")
-    print(f"Device Name: {torch.cuda.get_device_name(0)}")
-else:
-    print("CUDA is not available.")
 
 def create_features(df):
     """Create linear and non-linear features"""
@@ -166,7 +160,7 @@ X = construction_features.drop(columns=['Adj Close']).values
 y = construction_features['Adj Close'].values  # Target is the percentage change in Adj Close
 
 # Scale features
-scaler = StandardScaler()
+scaler = MinMaxScaler()
 X_scaled = scaler.fit_transform(X)
 
 # Final Evaluation on Test Set
@@ -182,15 +176,11 @@ param_grid = {
     'max_depth': [5, 7, 10],                # Depth of the trees
     'learning_rate': [0.01, 0.05, 0.1],   # Step size for weight updates
     'n_estimators': [200, 300],      # Number of boosting rounds
-    'gamma': [0, 0.1, 0.3],                 # Minimum loss reduction required to make a further partition
-    'subsample': [0.8, 1.0],                 # Subsample ratio of the training instances
-    'colsample_bytree': [0.8, 1.0],          # Subsample ratio of columns when constructing each tree
-    'reg_alpha': [0, 0.5, 1],                # L1 regularization
     'reg_lambda': [1, 1.5, 2],             # L2 regularization
 }
 
 # Initialize XGBoost
-xgb_model = xgb.XGBRegressor(objective='reg:squarederror', random_state=42, tree_method="gpu_hist", gpu_id=0, predictor="gpu_predictor", n_jobs=-1)
+xgb_model = xgb.XGBRegressor(objective='reg:squarederror', random_state=42, n_jobs=-1)
 
 # Set up GridSearchCV
 grid_search = GridSearchCV(
