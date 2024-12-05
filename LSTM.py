@@ -24,6 +24,7 @@ def create_features(df):
     # Square and cube terms
     for feature in numeric_features:
         df_new[f'{feature}_squared'] = df[feature] ** 2
+        df_new[f'{feature}_cubed'] = df[feature] ** 3
     
     # Log terms
     for feature in numeric_features:
@@ -31,20 +32,22 @@ def create_features(df):
             df_new[f'{feature}_log'] = np.log(df[feature] + 1)
     
     # Interaction terms
-    # important_features = ['Adj Close', 'Volume', 'RSI']
-    # for i in range(len(important_features)):
-    #     for j in range(i+1, len(important_features)):
-    #         df_new[f'{important_features[i]}_{important_features[j]}_interaction'] = (
-    #             df[important_features[i]] * df[important_features[j]]
-    #         )
+    important_features = ['Adj Close', 'Volume', 'RSI']
+    for i in range(len(important_features)):
+        for j in range(i+1, len(important_features)):
+            df_new[f'{important_features[i]}_{important_features[j]}_interaction'] = (
+                df[important_features[i]] * df[important_features[j]]
+            )
     return df_new
 
-def create_sequences(data, target, sequence_length):
-    """Create sequences for LSTM"""
+def create_sequences(data, sequence_length=30):
+    """
+    Create sequences of past data for LSTM.
+    """
     X, y = [], []
-    for i in range(len(data) - sequence_length):
-        X.append(data[i:(i + sequence_length)])
-        y.append(target[i + sequence_length])
+    for i in range(sequence_length, len(data)):
+        X.append(data[i-sequence_length:i])  # Sequence of 'sequence_length' days
+        y.append(data[i, 0])  # Target is the 'Adj Close' column
     return np.array(X), np.array(y)
 
 def forward_stepwise_selection_optimized(X, y, sequence_length, model_fn, metric=mean_squared_error, improvement_threshold=0.01, max_features=None):
@@ -158,7 +161,7 @@ class LSTMRegressor(BaseEstimator, RegressorMixin):
         self.dropout = dropout
         self.weight_decay = weight_decay
         self.patience = patience
-        self.device = torch.device('cuda')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = None
 
     def _build_model(self):
@@ -258,38 +261,39 @@ X_test = df_test.drop(columns=['Adj Close'])
 y_test = df_test['Adj Close']
 
 # Run optimized forward selection
-selected_features, performance_history = forward_stepwise_selection_optimized(
-    X_train, 
-    y_train, 
-    sequence_length=30, 
-    model_fn=LSTMRegressor, 
-    metric=mean_squared_error, 
-    improvement_threshold=0.01,  # Minimum improvement to continue
-    max_features=10  # Optional: Limit the number of selected features
-)
-
+# selected_features, performance_history = forward_stepwise_selection_optimized(
+#     X_train, 
+#     y_train, 
+#     sequence_length=30, 
+#     model_fn=LSTMRegressor, 
+#     metric=mean_squared_error, 
+#     improvement_threshold=0.01,  # Minimum improvement to continue
+#     max_features=10  # Optional: Limit the number of selected features
+# )
+selected_features = ['High', 'Low', 'Adj Close_RSI_interaction', 'RSI_log']
 # Use only the selected features
-X_train = X_train[selected_features]
-X_test = X_test[selected_features]
+# X_train = X_train[selected_features]
+# X_test = X_test[selected_features]
 
 # Normalize data
 scaler = MinMaxScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)
+X_train_scaled = scaler.fit_transform(X_train[selected_features])
+X_test_scaled = scaler.transform(X_test[selected_features])
 
 # Create sequences
 sequence_length = 30
-X_train_seq, y_train_seq = create_sequences(X_train_scaled, y_train.values, sequence_length)
-X_test_seq, y_test_seq = create_sequences(X_test_scaled, y_test.values, sequence_length)
+
+# Create sequences using the original function
+X_train_seq, y_train_seq = create_sequences(X_train_scaled, sequence_length)
+X_test_seq, y_test_seq = create_sequences(X_test_scaled, sequence_length)
 
 # Hyperparameter grid
 param_grid = {
     'hidden_size': [50, 100, 200],
     'num_layers': [1, 2],
     'lr': [0.001, 0.01],
-    'batch_size': [16, 32],
+    'batch_size': [16, 25],
     'dropout': [0.2, 0.4],
-    'weight_decay': [1e-4, 1e-3],
     'epochs': [50],  # Fixed epochs for GridSearch
 }
 
@@ -307,12 +311,13 @@ grid_search = GridSearchCV(
 )
 
 # Fit GridSearchCV
-grid_search.fit(X_train_seq, y_train_seq) 
+# grid_search.fit(X_train_seq, y_train_seq) 
 
-# Best parameters
-best_params = grid_search.best_params_
-print("Best Parameters:", best_params)
+# # Best parameters
+# best_params = grid_search.best_params_
+# print("Best Parameters:", best_params)
 
+best_params = {'batch_size': 16, 'dropout': 0.2, 'epochs': 50, 'hidden_size': 50, 'lr': 0.001, 'num_layers': 1}
 # Train the final model on the entire training set
 final_model = LSTMRegressor(input_size=X_train_seq.shape[2], **best_params)
 final_model.fit(X_train_seq, y_train_seq)
