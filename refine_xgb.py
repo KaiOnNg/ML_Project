@@ -176,11 +176,13 @@ param_grid = {
     'max_depth': [5, 7, 10],                # Depth of the trees
     'learning_rate': [0.01, 0.05, 0.1],   # Step size for weight updates
     'n_estimators': [200, 300],      # Number of boosting rounds
+    'colsample_bytree': [0.6, 0.8, 1],      # Fraction of features to select
+    'subsample': [0.6, 0.8, 1],             # Fraction of instances to select
     'reg_lambda': [1, 1.5, 2],             # L2 regularization
 }
 
 # Initialize XGBoost
-xgb_model = xgb.XGBRegressor(objective='reg:squarederror', random_state=42, n_jobs=-1)
+xgb_model = xgb.XGBRegressor(objective='reg:squarederror', random_state=42)
 
 # Set up GridSearchCV
 grid_search = GridSearchCV(
@@ -194,10 +196,10 @@ grid_search = GridSearchCV(
 
 grid_search.fit(X_train_val, y_train_val)
 best_params = grid_search.best_params_
-print(f"Best Hyperparameters: {best_params}")
-print(f"Best RMSE: {np.sqrt(-grid_search.best_score_)}")
-print(f"Best MAE: {mean_absolute_error(y_test, grid_search.best_estimator_.predict(X_test))}")
-print(f"Best R2: {r2_score(y_test, grid_search.best_estimator_.predict(X_test))}")
+# RMSE, MAE, R2
+print(f"RMSE: {np.sqrt(-grid_search.best_score_):.4f}")
+print(f"MAE: {mean_absolute_error(y_test, grid_search.best_estimator_.predict(X_test)):.4f}")
+print(f"R2: {r2_score(y_test, grid_search.best_estimator_.predict(X_test)):.4f}")
 optimized_xgb_model = xgb.XGBRegressor(objective='reg:squarederror', random_state=42, **best_params)
 
 # Train the final model
