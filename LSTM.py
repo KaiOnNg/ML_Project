@@ -141,19 +141,22 @@ features = df.drop(columns=["Adj Close"]).columns
 target = df["Adj Close"]
 
 # Forward Stepwise Selection
-selected_features = forward_stepwise_selection(
-    df[features], target, sequence_length=30, model_fn=lambda input_size: LSTM(input_size).to("cpu"), max_features=10
-)
-print("Selected Features:", selected_features)
+# selected_features = forward_stepwise_selection(
+#     df[features], target, sequence_length=30, model_fn=lambda input_size: LSTM(input_size).to("cpu"), max_features=10
+# )
+# print("Selected Features:", selected_features)
+
+# selected_features = ['Adj Close', 'Open', 'High', 'Low', 'Volume', 'ATR', 'ADX', 'RSI', 
+#             'MACD', 'MACD_Signal', 'Volatility', 'Max_Drawdown']
 
 # selected_features = ['Volume', 'MACD', 'Adj Close_log']
 # Use only selected features
-df = df[selected_features + ["Adj Close"]]
+# df = df[selected_features + ["Adj Close"]]
 
 # Normalize data
 scaler_X = MinMaxScaler()
 scaler_y = MinMaxScaler()
-X_scaled = scaler_X.fit_transform(df[selected_features])
+X_scaled = scaler_X.fit_transform(df.drop(columns=["Adj Close"]).values)
 y_scaled = scaler_y.fit_transform(df["Adj Close"].values.reshape(-1, 1))
 
 # Split into train-validation-test sets
@@ -183,13 +186,13 @@ y_test_tensor = torch.tensor(y_test, dtype=torch.float32)
 
 # Initialize the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = LSTM(input_size=X_train.shape[2], hidden_size=50, num_layers=1, dropout=0.2).to(device)
+model = LSTM(input_size=X_train.shape[2], hidden_size=100, num_layers=1, dropout=0.4).to(device)
 criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
 # Training loop
-num_epochs = 30
-batch_size = 32
+num_epochs = 40
+batch_size = 16
 
 for epoch in range(num_epochs):
     # Training phase
