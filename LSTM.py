@@ -2,6 +2,11 @@ from matplotlib import pyplot as plt
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 import torch
+# Step 1: Add diagnostic imports and checks at top of file
+print(f"PyTorch Version: {torch.__version__}")
+print(f"CUDA Available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"GPU Device: {torch.cuda.get_device_name()}")
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit, train_test_split
@@ -19,7 +24,6 @@ def create_features(df):
     # Square and cube terms
     for feature in numeric_features:
         df_new[f'{feature}_squared'] = df[feature] ** 2
-        df_new[f'{feature}_cubed'] = df[feature] ** 3
     
     # Log terms
     for feature in numeric_features:
@@ -27,20 +31,20 @@ def create_features(df):
             df_new[f'{feature}_log'] = np.log(df[feature] + 1)
     
     # Interaction terms
-    important_features = ['Adj Close', 'Volume', 'RSI']
-    for i in range(len(important_features)):
-        for j in range(i+1, len(important_features)):
-            df_new[f'{important_features[i]}_{important_features[j]}_interaction'] = (
-                df[important_features[i]] * df[important_features[j]]
-            )
+    # important_features = ['Adj Close', 'Volume', 'RSI']
+    # for i in range(len(important_features)):
+    #     for j in range(i+1, len(important_features)):
+    #         df_new[f'{important_features[i]}_{important_features[j]}_interaction'] = (
+    #             df[important_features[i]] * df[important_features[j]]
+    #         )
     return df_new
 
-def create_sequences(data, sequence_length):
+def create_sequences(data, target, sequence_length):
     """Create sequences for LSTM"""
     X, y = [], []
-    for i in range(sequence_length, len(data)):
-        X.append(data[i-sequence_length:i])
-        y.append(data[i, 0])  # First column is Adj Close
+    for i in range(len(data) - sequence_length):
+        X.append(data[i:(i + sequence_length)])
+        y.append(target[i + sequence_length])
     return np.array(X), np.array(y)
 
 def forward_stepwise_selection_optimized(X, y, sequence_length, model_fn, metric=mean_squared_error, improvement_threshold=0.01, max_features=None):
@@ -67,7 +71,7 @@ def forward_stepwise_selection_optimized(X, y, sequence_length, model_fn, metric
 
     # Create a single train-validation split
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
-    
+    print(f"Training set: {X_train.shape}, Validation set: {X_val.shape}")
     while remaining_features:
         feature_metrics = {}
 
@@ -77,10 +81,10 @@ def forward_stepwise_selection_optimized(X, y, sequence_length, model_fn, metric
 
             # Create sequences for the candidate features
             X_candidate = X_train[candidate_features].to_numpy()
-            X_seq, y_seq = create_sequences(X_candidate, sequence_length)
+            X_seq, y_seq = create_sequences(X_candidate, y_train.values, sequence_length)
 
             X_val_candidate = X_val[candidate_features].to_numpy()
-            X_val_seq, y_val_seq = create_sequences(X_val_candidate, sequence_length)
+            X_val_seq, y_val_seq = create_sequences(X_val_candidate, y_val.values ,sequence_length)
 
             # Train model for the current subset of features
             model = model_fn(len(candidate_features))
@@ -154,7 +158,7 @@ class LSTMRegressor(BaseEstimator, RegressorMixin):
         self.dropout = dropout
         self.weight_decay = weight_decay
         self.patience = patience
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device('cuda')
         self.model = None
 
     def _build_model(self):
@@ -173,18 +177,22 @@ class LSTMRegressor(BaseEstimator, RegressorMixin):
         train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=False)
         val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
 
-        self.model = self._build_model()
+        self.model = self._build_model().to(self.device)
         criterion = nn.MSELoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
 
         best_loss = float('inf')
         patience_counter = 0
+        best_model_state = copy.deepcopy(self.model.state_dict())
+
 
         for epoch in range(self.epochs):
             # Training phase
             self.model.train()
             train_loss = 0.0
             for batch_X, batch_y in train_loader:
+                batch_X = batch_X.to(self.device)
+                batch_y = batch_y.to(self.device)
                 optimizer.zero_grad()
                 outputs = self.model(batch_X)
                 loss = criterion(outputs, batch_y.unsqueeze(1))
@@ -197,6 +205,8 @@ class LSTMRegressor(BaseEstimator, RegressorMixin):
             val_loss = 0.0
             with torch.no_grad():
                 for batch_X, batch_y in val_loader:
+                    batch_X = batch_X.to(self.device)
+                    batch_y = batch_y.to(self.device)
                     outputs = self.model(batch_X)
                     loss = criterion(outputs, batch_y.unsqueeze(1))
                     val_loss += loss.item()
