@@ -50,10 +50,10 @@ Watch our final presentation video here:
 ## 👨‍💻 Contributors
 
 - **Daniel Harapiak** (Computer Science)  
-  - Research lead, preprocessing, Lasso implementation, and report writing.
+  - Preprocessing, brain storming, and report writing.
 
 - **Leyang Xing** (Software Engineering)  
-  - Feature engineering, LSTM development, proposal writing.
+  - Feature engineering, Lasso and LSTM development, XGBoost implementation structure, proposal writing.
 
 - **Kai On Ng** (Software Engineering)  
   - XGBoost tuning, model validation strategy, data transformation research.
